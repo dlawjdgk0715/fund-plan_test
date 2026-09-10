@@ -1,0 +1,11 @@
+# 파이썬 부산물만 제외합니다.
+# ※ templates / data / db 는 사내 Private 저장소 전제로 포함합니다.
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.streamlit/secrets.toml
+.DS_Store
+~$*
+*.db-journal

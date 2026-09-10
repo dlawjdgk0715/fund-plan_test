@@ -1,0 +1,23 @@
+# ── 회사 데이터: 절대 깃허브에 올리지 않습니다 ──
+db/*.db
+db/*.db-journal
+data/
+templates/*.xlsx
+templates/*.xlsm
+templates/*.pptx
+templates/*.potx
+*.xlsx
+*.xlsm
+*.pptx
+*.potx
+templates/_fast_*
+
+!templates/README.md
+
+# 파이썬 부산물
+__pycache__/
+*.pyc
+.venv/
+venv/
+.streamlit/secrets.toml
+.DS_Store
