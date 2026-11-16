@@ -266,7 +266,8 @@ def _boot_id() -> str:
 
 
 def _now() -> str:
-    return time.strftime("%Y-%m-%d %H:%M")
+    from core.period import now_kst
+    return now_kst()
 
 
 def _mark(ok, msg, sha="", pulled=False) -> None:

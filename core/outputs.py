@@ -26,6 +26,7 @@ from core.ppt_writer import PPT_TEMPLATE, build_ppt
 from core.remarks_rule import (SUMMARY1_KEYS, cashflow_rows_from_summary1,
                                detail_drafts, summary1_drafts,
                                summary1_from_cashflow)
+from core.period import now_kst
 from core.report import DETAIL_ROWS, build_report
 
 XL_MIME = "application/vnd.ms-excel.sheet.macroEnabled.12"
@@ -107,7 +108,7 @@ def _save_cache(period: str, stamp: str, files, fund: dict, warnings) -> None:
             "period": period, "stamp": stamp,
             "files": [[n, rel(p), m] for n, p, m in files],
             "fund": fund, "warnings": warnings,
-            "made_at": time.strftime("%Y-%m-%d %H:%M"),
+            "made_at": now_kst(),
         }, ensure_ascii=False), encoding="utf-8")
     except OSError:
         pass

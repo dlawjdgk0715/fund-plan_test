@@ -231,4 +231,22 @@ assert "if plan:" in _src[_i:_i + 400], "계획월에도 같은 가드가 필요
 ok("자료 없이 산출해도 그 달 연간 기록을 덮지 않음 (0 으로 지워지는 사고 방지)")
 
 
+# ── 9. 화면에 찍는 시각이 한국 시간인지 ─────────────────────────
+import datetime as _dt                                            # noqa: E402
+from core.period import KST, now_kst                              # noqa: E402
+
+_v = now_kst()
+assert len(_v) == 16 and _v[4] == "-" and _v[13] == ":", f"형식이 다릅니다: {_v}"
+_gap = abs((_dt.datetime.strptime(_v, "%Y-%m-%d %H:%M")
+            - _dt.datetime.now(KST).replace(tzinfo=None)).total_seconds())
+assert _gap < 120, f"한국 시간과 {_gap:.0f}초 차이납니다"
+ok("화면 시각이 한국 시간 (서버가 UTC 여도 9시간 어긋나지 않음)")
+
+for _f in ("core/gitstore.py", "core/outputs.py"):
+    _t = (ROOT / _f).read_text(encoding="utf-8")
+    assert 'strftime("%Y-%m-%d %H:%M")' not in _t, \
+        f"{_f} 에 서버 시간 그대로 쓰는 곳이 남아 있습니다"
+ok("저장·산출 시각 표시가 모두 한국 시간으로 통일됨")
+
+
 print(f"\n총 {n_ok}개 항목 통과")

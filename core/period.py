@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
+
 
 def parse(period: str) -> tuple[int, int]:
     y, m = period.strip().split("-")
@@ -37,3 +39,15 @@ def fmt(period: str) -> str:
     """화면 표시용: '2026-07' → '2026년 7월'"""
     y, m = parse(period)
     return f"{y}년 {m}월"
+
+
+# ── 화면에 찍는 시각 (2026-11) ────────────────────────────────────
+# Streamlit Cloud 서버는 **UTC** 로 돕니다. 그래서 `time.strftime` 을 그냥 쓰면
+# 한국 시간보다 9시간 이른 값이 찍혔습니다(16:58 → 07:56).
+# 사람이 보는 시각은 전부 이 함수를 쓰세요. 한국은 서머타임이 없어 +9 고정입니다.
+KST = _dt.timezone(_dt.timedelta(hours=9))
+
+
+def now_kst(fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """한국 시간 문자열. 서버가 UTC 든 아니든 같은 값이 나옵니다."""
+    return _dt.datetime.now(KST).strftime(fmt)
