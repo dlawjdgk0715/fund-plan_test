@@ -374,7 +374,8 @@ def build_workbook(actual_txns, plan_txns, actual_result: Result,
                    leaf_remarks: dict[str, str] | None = None,
                    summary_drafts: dict[str, str] | None = None,
                    out_name: str | None = None,
-                   draft: bool = False) -> WriteReport:
+                   draft: bool = False,
+                   annual_history: dict[int, dict] | None = None) -> WriteReport:
     warnings: list[str] = []
     if not TEMPLATE_PATH.exists():
         raise FileNotFoundError(
@@ -436,9 +437,15 @@ def build_workbook(actual_txns, plan_txns, actual_result: Result,
     open_usd_total = opening_liq_usd + opening_inv_usd
     _fill_annual_actual(wb, actual_result, plan_result, actual_month, plan_month, warnings,
                         open_total=open_krw_total)
+    # 5-a) 지난 달들을 먼저 복원합니다 (템플릿이 몇 월 파일이든 상관없게).
+    #      이 단계가 없으면 템플릿에 값이 없는 달(예: 8·9월)이 빈칸으로 남습니다.
+    _restore_annual_history(wb, annual_history or {}, warnings,
+                            skip={actual_month, plan_month})
     _fill_annual_sheet(wb, actual_result, actual_month, warnings,
                        opening=(open_krw_total, open_usd_total))
     _fill_annual_sheet(wb, plan_result, plan_month, warnings)
+    _fix_annual_total_formulas(wb, warnings)
+    _warn_empty_annual_months(wb, actual_month, plan_month, warnings)
 
     # 7) 월 표시 자동화
     _fix_month_labels(wb, actual_month, plan_month)
@@ -998,15 +1005,124 @@ def _fill_annual_sheet(wb, result: Result, month: int, warnings,
             ws[f"{krw_col}{base}"] = opening[0]
             ws[f"{usd_col}{base}"] = opening[1]
 
-    from core.engine import SUB_ETC32
+    krw_vals, usd_vals = annual_values(result)
     for key, row in ANNUAL_LEAF_ROW.items():
+        ws[f"{krw_col}{row}"] = krw_vals[key]
+        ws[f"{usd_col}{row}"] = usd_vals[key]
+
+
+def annual_values(result: Result) -> tuple[dict[str, float], dict[str, float]]:
+    """연간 시트 한 달치 값 (원화, 외화) — 저장용·기입용으로 함께 씁니다."""
+    from core.engine import SUB_ETC32
+    krw: dict[str, float] = {}
+    usd: dict[str, float] = {}
+    for key in ANNUAL_LEAF_ROW:
         if key == "expense.etc32":       # 소계 — leaf 합으로 계산
-            krw = sum(result.krw.get(k, 0.0) for k in SUB_ETC32)
-            usd = sum(result.usd.get(k, 0.0) for k in SUB_ETC32)
+            krw[key] = sum(result.krw.get(k, 0.0) for k in SUB_ETC32)
+            usd[key] = sum(result.usd.get(k, 0.0) for k in SUB_ETC32)
         else:
-            krw, usd = result.krw.get(key, 0.0), result.usd.get(key, 0.0)
-        ws[f"{krw_col}{row}"] = krw
-        ws[f"{usd_col}{row}"] = usd
+            krw[key] = result.krw.get(key, 0.0)
+            usd[key] = result.usd.get(key, 0.0)
+    return krw, usd
+
+
+def _restore_annual_history(wb, history: dict, warnings, skip: set[int]) -> None:
+    """저장해 둔 지난 달 값으로 연간 시트를 되살립니다 (2026-11 신설).
+
+    왜 필요한가
+        예전에는 '이번 실적월·계획월' 두 칸만 채우고 나머지는 템플릿 값을
+        그대로 썼습니다. 템플릿이 7월 원본에 고정돼 있어서 8·9월이 **빈칸**으로
+        남고, 합계·평균이 두 달치를 0으로 집계했습니다.
+
+    무엇을 하나
+        `annual_months` 표에 쌓아 둔 달을 전부 다시 써넣습니다.
+        이번에 새로 채울 달(skip)은 건드리지 않습니다 — 바로 뒤에서 채웁니다.
+    """
+    if not history or SRC_ANNUAL not in wb.sheetnames:
+        return
+    ws = wb[SRC_ANNUAL]
+    done = []
+    for month in sorted(history):
+        if month in skip:
+            continue
+        base = ANNUAL_SHEET_COL.get(month)
+        if not base:
+            continue
+        krw_col = base
+        usd_col = get_column_letter(openpyxl.utils.column_index_from_string(base) + 1)
+        vals = history[month]
+        for key, row in ANNUAL_LEAF_ROW.items():
+            ws[f"{krw_col}{row}"] = float(vals["krw"].get(key, 0.0) or 0.0)
+            ws[f"{usd_col}{row}"] = float(vals["usd"].get(key, 0.0) or 0.0)
+        done.append(month)
+    if done:
+        warnings.append("연간 시트에 지난 달 값을 복원했습니다: "
+                        + ", ".join(f"{m}월" for m in done))
+
+
+def _fix_annual_total_formulas(wb, warnings) -> None:
+    """연간 시트 **합계·평균 열의 빠진 수식**을 채웁니다 (2026-11 신설).
+
+    원본 워크북은 '소계 밑에 달린 16개 행'(매출·세금환급·이자수익·기타 /
+    급여·상여·퇴직연금·4대보험 / 제세공과금 하위 4 / 기타지출 하위 4)의
+    **합계 칸이 비어 있었습니다.**
+    그래서 `=SUM(AQ9:AQ12)` 같은 소계가 늘 0 이었고, 평균 열은 합계를
+    참조하므로 **덩달아 0** 이었습니다 (8·9월 문제와는 별개로 처음부터 틀린 값).
+
+    마케팅비·지급이자·자산매입·투자금 행에 이미 들어 있는 것과 **같은 꼴**로,
+    **비어 있는 칸에만** 써넣습니다. 원래 있던 수식은 건드리지 않습니다.
+    """
+    if SRC_ANNUAL not in wb.sheetnames:
+        return
+    ws = wb[SRC_ANNUAL]
+    # '합계' 열을 글자로 찾습니다 (열 번호를 코드에 박지 않습니다)
+    total_col = None
+    for c in range(7, ws.max_column + 1):
+        v = ws.cell(row=4, column=c).value
+        if isinstance(v, str) and v.strip() == "합계":
+            total_col = c
+            break
+    if not total_col:
+        warnings.append("연간 시트에서 '합계' 열을 못 찾아 합계 수식 보정을 건너뜁니다.")
+        return
+    months = ",".join(ANNUAL_SHEET_COL[m] + "{r}" for m in range(1, 13))
+    letter = get_column_letter(total_col)
+    fixed = 0
+    for row in sorted(set(ANNUAL_LEAF_ROW.values())):
+        cell = ws.cell(row=row, column=total_col)
+        if cell.value is not None:          # 이미 있는 수식은 그대로 둡니다
+            continue
+        cell.value = "=SUM(" + months.format(r=row) + ")"
+        fixed += 1
+    if fixed:
+        warnings.append(
+            f"연간 시트 합계({letter})열에 빠져 있던 수식 {fixed}칸을 채웠습니다 "
+            "— 수입·인건비·제세공과금·기타 소계가 0으로 나오던 문제(평균 열 포함).")
+
+
+def _warn_empty_annual_months(wb, actual_month: int, plan_month: int,
+                              warnings) -> None:
+    """연간 시트에 **빈 달**이 남아 있으면 알려줍니다.
+
+    같은 사고(8·9월이 조용히 비는 것)가 다시 나면 바로 눈에 띄도록 하는 장치입니다.
+    """
+    if SRC_ANNUAL not in wb.sheetnames:
+        return
+    ws = wb[SRC_ANNUAL]
+    rows = list(ANNUAL_LEAF_ROW.values())
+    empty = []
+    for month in range(1, max(actual_month, plan_month) + 1):
+        base = ANNUAL_SHEET_COL.get(month)
+        if not base:
+            continue
+        col = openpyxl.utils.column_index_from_string(base)
+        if all(ws.cell(row=r, column=col).value is None for r in rows):
+            empty.append(month)
+    if empty:
+        warnings.append(
+            "⚠️ 연간 시트에서 " + ", ".join(f"{m}월" for m in empty)
+            + " 이(가) 비어 있습니다. 그 달 수치가 합계·평균에서 빠집니다. "
+              "해당 월 자료를 올려 한 번 산출하면 자동으로 채워집니다.")
 
 
 # 템플릿에 박혀 있는 옛 달 (6월=실적, 7월=계획)

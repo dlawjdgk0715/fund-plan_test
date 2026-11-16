@@ -5,7 +5,8 @@ from pathlib import Path
 
 here = Path(__file__).resolve().parent
 fails = []
-for f in ("test_parsers.py", "test_engine.py", "test_report.py", "test_ui.py"):
+for f in ("test_parsers.py", "test_engine.py", "test_report.py", "test_ui.py",
+          "test_store.py"):
     print(f"\n{'='*50}\n{f}\n{'='*50}")
     r = subprocess.run([sys.executable, str(here / f)])
     if r.returncode:

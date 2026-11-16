@@ -11,9 +11,27 @@ from core.config import DB_PATH, SCHEMA_PATH
 
 
 # ── 연결 ──────────────────────────────────────────────────────────
+# 저장한 내용을 깃허브(영구 저장소)에도 올립니다.
+# Streamlit Cloud 는 다시 띄울 때 디스크를 되돌리기 때문에, 여기서 올려 두지
+# 않으면 한 달 뒤에 자료가 사라집니다.  설정이 없으면 아무 일도 안 합니다.
+_MUTE = [False]          # init_db 동안에는 올리지 않습니다
+
+
+class _Conn(sqlite3.Connection):
+    def commit(self) -> None:          # type: ignore[override]
+        super().commit()
+        if _MUTE[0]:
+            return
+        try:
+            from core import gitstore
+            gitstore.mark_dirty()
+        except Exception:               # noqa: BLE001 — 저장은 이미 끝났습니다
+            pass
+
+
 def connect() -> sqlite3.Connection:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, factory=_Conn)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -68,7 +86,19 @@ def _seed_recheck(conn) -> None:
 
 
 def init_db() -> None:
-    """앱 시작 시 1회. 테이블이 없으면 만들고 태그 사전을 채웁니다."""
+    """앱 시작 시 1회. 테이블이 없으면 만들고 태그 사전을 채웁니다.
+
+    맨 먼저 **깃허브에 저장해 둔 DB 를 내려받습니다**(설정돼 있을 때만).
+    Streamlit Cloud 는 앱을 다시 띄울 때 디스크를 되돌리므로, 이 단계가
+    없으면 지난달 자료가 전부 없어진 채로 시작합니다.
+    """
+    try:
+        from core import gitstore
+        gitstore.pull()
+    except Exception:                   # noqa: BLE001 — 못 받아도 로컬로 계속
+        pass
+
+    _MUTE[0] = True                     # 초기화 중에는 올리지 않습니다
     conn = connect()
     conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
     _ensure_columns(conn, "month_balances", [
@@ -89,8 +119,40 @@ def init_db() -> None:
         from seed_tags import seed  # type: ignore
         seed(conn)
     _seed_recheck(conn)
+    _seed_annual(conn)
     conn.commit()
     conn.close()
+    _MUTE[0] = False
+
+
+def _seed_annual(conn) -> None:
+    """연간 시트 월별 값이 하나도 없으면 `db/annual_seed.json` 에서 채웁니다.
+
+    2026-08~09 가 빈 채로 산출되던 문제(템플릿이 7월 원본에 고정)를 되돌리기 위한
+    **최초 1회** 보정입니다. 한 번 들어가면 그 뒤로는 산출할 때마다 갱신됩니다.
+    이미 값이 있으면 건드리지 않습니다 — 사용자가 만든 값을 덮지 않습니다.
+    """
+    have = conn.execute("SELECT COUNT(*) FROM annual_months").fetchone()[0]
+    if have:
+        return
+    path = SCHEMA_PATH.parent / "annual_seed.json"
+    if not path.exists():
+        return
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        year = int(data.get("year", 2026))
+        for m, v in (data.get("months") or {}).items():
+            for key in set(v.get("krw", {})) | set(v.get("usd", {})):
+                conn.execute(
+                    """INSERT OR IGNORE INTO annual_months
+                       (year, month, row_key, krw, usd, kind)
+                       VALUES (?,?,?,?,?,?)""",
+                    (year, int(m), key,
+                     float(v.get("krw", {}).get(key, 0.0) or 0.0),
+                     float(v.get("usd", {}).get(key, 0.0) or 0.0),
+                     str(v.get("kind", "") or "")))
+    except Exception as e:              # noqa: BLE001 — 씨앗이 깨져도 앱은 떠야 합니다
+        print(f"[data_store] annual_seed.json 읽기 실패: {e}")
 
 
 # ── 거래 ──────────────────────────────────────────────────────────
@@ -572,3 +634,60 @@ def save_remark_style(table_key: str, style: dict) -> None:
         (table_key, json.dumps(style, ensure_ascii=False)))
     conn.commit()
     conn.close()
+
+
+# ── 연간 시트: 월별 값 보관 (2026-11 신설) ─────────────────────────
+# 왜 필요한가
+#   연간 시트는 '이번 실적월·계획월' 두 칸만 앱이 채우고, 나머지 달은
+#   **템플릿에 들어 있던 값을 그대로 이어받는** 구조였습니다.
+#   템플릿이 7월 원본에 고정돼 있어서 8·9월은 채우는 주체가 없어 비어 버렸고,
+#   합계·평균 열이 두 달치를 0으로 집계했습니다.
+#
+#   이제 산출할 때마다 그 달 값을 여기에 쌓고, 다음 달 산출에서 **지난 달들을
+#   전부 복원**합니다. 템플릿이 몇 월 파일이든 상관없어집니다.
+def save_annual_month(year: int, month: int, krw: dict, usd: dict,
+                      kind: str = "") -> int:
+    """한 달치 연간 시트 값을 저장(덮어쓰기)합니다. row_key 는 ANNUAL_LEAF_ROW 키."""
+    conn = connect()
+    n = 0
+    for key in set(krw) | set(usd):
+        conn.execute(
+            """INSERT INTO annual_months (year, month, row_key, krw, usd, kind,
+                                          updated_at)
+               VALUES (?,?,?,?,?,?, datetime('now','localtime'))
+               ON CONFLICT(year, month, row_key) DO UPDATE SET
+                   krw=excluded.krw, usd=excluded.usd, kind=excluded.kind,
+                   updated_at=excluded.updated_at""",
+            (int(year), int(month), key,
+             float(krw.get(key, 0.0) or 0.0), float(usd.get(key, 0.0) or 0.0), kind))
+        n += 1
+    conn.commit()
+    conn.close()
+    return n
+
+
+def load_annual_year(year: int) -> dict[int, dict]:
+    """그 해에 저장된 모든 달. {월: {'krw': {...}, 'usd': {...}, 'kind': 'actual'}}"""
+    conn = connect()
+    rows = conn.execute(
+        "SELECT month, row_key, krw, usd, kind FROM annual_months WHERE year=?",
+        (int(year),)).fetchall()
+    conn.close()
+    out: dict[int, dict] = {}
+    for r in rows:
+        m = int(r["month"])
+        d = out.setdefault(m, {"krw": {}, "usd": {}, "kind": ""})
+        d["krw"][r["row_key"]] = float(r["krw"] or 0.0)
+        d["usd"][r["row_key"]] = float(r["usd"] or 0.0)
+        if r["kind"]:
+            d["kind"] = r["kind"]
+    return out
+
+
+def annual_saved_months(year: int) -> list[int]:
+    conn = connect()
+    rows = conn.execute(
+        "SELECT DISTINCT month FROM annual_months WHERE year=? ORDER BY month",
+        (int(year),)).fetchall()
+    conn.close()
+    return [int(r["month"]) for r in rows]

@@ -126,3 +126,20 @@ CREATE TABLE IF NOT EXISTS remark_styles (
     samples    INTEGER DEFAULT 0,
     updated_at TEXT DEFAULT (datetime('now','localtime'))
 );
+
+-- ── 연간 시트: 월별 값 보관 (2026-11 신설) ─────────────────────────
+-- 왜: 연간 시트는 '이번 실적월·계획월' 두 칸만 앱이 채우고, 나머지 달은
+--     템플릿에 들어 있던 값을 이어받는 구조였습니다. 템플릿이 7월 원본에
+--     고정돼 있어서 8·9월이 아무도 채우지 않은 채 비어 버렸습니다.
+--     이제 산출할 때마다 그 달 값을 여기에 쌓아 두고, 다음 달 산출에서
+--     **지난 달들을 전부 복원**합니다. 템플릿에 의존하지 않습니다.
+CREATE TABLE IF NOT EXISTS annual_months (
+    year       INTEGER NOT NULL,
+    month      INTEGER NOT NULL,
+    row_key    TEXT    NOT NULL,   -- core/excel_writer.ANNUAL_LEAF_ROW 의 키
+    krw        REAL    DEFAULT 0,
+    usd        REAL    DEFAULT 0,
+    kind       TEXT    DEFAULT '', -- 'actual'(실적) | 'plan'(계획)
+    updated_at TEXT    DEFAULT (datetime('now','localtime')),
+    PRIMARY KEY (year, month, row_key)
+);

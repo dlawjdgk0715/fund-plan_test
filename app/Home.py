@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import streamlit as st
 
-from core.data_store import init_db, load_fund_balance, previous_period
+from core import gitstore
+from core.data_store import annual_saved_months, init_db, load_fund_balance, previous_period
 from core.period import actual_month_of, fmt, next_period, plan_month_of
 from core.nav import apply_nav, set_show_optional, show_optional
 from core.outputs import inputs_stamp, last_outputs
@@ -144,6 +145,48 @@ else:
                             use_container_width=True, key=f"home_dl_{label}")
     st.caption(f"만든 시각: {_last['made_at'] or '기록 없음'} · 저장 위치: "
                f"`{_last['files'][0][1].parent}`")
+
+# ── 자료 보관 상태 ────────────────────────────────────────────────
+# 웹(Streamlit Cloud)은 앱을 다시 띄울 때 디스크를 되돌립니다.
+# 그래서 저장한 내용을 깃허브에 올려 두고, 시작할 때 다시 내려받습니다.
+st.divider()
+_gs = gitstore.status()
+with st.expander(
+        ("☁️ 자료 보관 — " + ("저장 안 된 변경 있음" if _gs["dirty"] else "최신"))
+        if _gs["enabled"] else "💾 자료 보관 — 이 PC에만 저장됩니다",
+        expanded=bool(_gs["enabled"] and _gs["dirty"])):
+    if not _gs["enabled"]:
+        st.warning(
+            "**지금은 이 컴퓨터에만 저장됩니다.**\n\n"
+            "웹(Streamlit Cloud)에서 쓰실 때는 앱을 다시 띄울 때마다 입력한 자료가 "
+            "사라집니다. 아래를 앱 설정의 **Secrets** 에 넣어주세요.",
+            icon="⚠️")
+        st.code('FUNDPLAN_GH_TOKEN  = "github_pat_여기에"\n'
+                f'FUNDPLAN_GH_REPO   = "{_gs["repo"]}"\n'
+                f'FUNDPLAN_GH_BRANCH = "{_gs["branch"]}"', language="toml")
+    else:
+        c1, c2, c3 = st.columns([2, 2, 1])
+        c1.metric("마지막 불러오기", _gs["pulled_at"] or "—")
+        c2.metric("마지막 저장", _gs["pushed_at"] or "—")
+        if c3.button("☁ 지금 저장", use_container_width=True):
+            with st.spinner("저장소에 올리는 중…"):
+                r = gitstore.flush("수동 저장")
+            (st.success if r.get("ok") else st.error)(r.get("msg", ""))
+            st.rerun()
+        if _gs["dirty"]:
+            st.warning("아직 저장소에 안 올라간 변경이 있습니다. "
+                       "잠시 뒤 자동으로 올라가며, 급하면 [☁ 지금 저장]을 눌러주세요.")
+        else:
+            st.success("저장소와 같은 상태입니다.")
+        st.caption(f"보관 위치 `{_gs['repo']}` · 브랜치 `{_gs['branch']}` · "
+                   f"`{_gs['path']}`")
+    if _gs["last_msg"]:
+        st.caption(f"최근 기록: {_gs['last_at']} — {_gs['last_msg']}")
+
+    _saved = annual_saved_months(int(str(st.session_state.period)[:4]))
+    if _saved:
+        st.caption("연간 시트에 보관된 달: "
+                   + ", ".join(f"{m}월" for m in _saved))
 
 st.divider()
 prev = previous_period(st.session_state.period)

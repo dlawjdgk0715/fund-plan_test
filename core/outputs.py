@@ -204,10 +204,30 @@ def build_outputs(period: str, vals: dict, actual_month: int, plan_month: int,
     summary, detail_notes, leaf = collect_remarks(
         period, actual, plan, res, plan_res, actual_month, plan_month, rep)
 
+    # 연간 시트용으로 이번 달 값을 보관합니다 (2026-11 신설).
+    #   예전에는 템플릿에 든 값으로 지난 달을 이어받았는데, 템플릿이 7월 원본에
+    #   고정돼 있어 8·9월이 비어 버렸습니다. 이제 매달 여기에 쌓아 두고
+    #   산출할 때 지난 달을 전부 복원합니다.
+    annual_history: dict = {}
+    try:
+        from core.data_store import load_annual_year, save_annual_month
+        from core.excel_writer import annual_values
+        year = int(str(period)[:4])
+        plan_year = year + 1 if plan_month < actual_month else year
+        a_krw, a_usd = annual_values(res)
+        p_krw, p_usd = annual_values(plan_res)
+        save_annual_month(year, actual_month, a_krw, a_usd, kind="actual")
+        save_annual_month(plan_year, plan_month, p_krw, p_usd, kind="plan")
+        annual_history = load_annual_year(year)
+    except Exception as e:                       # noqa: BLE001 — 산출은 계속합니다
+        annual_history = {}
+        print(f"[outputs] 연간 월별 보관 실패: {e}")
+
     out = Outputs(stamp=stamp)
     if want_excel:
         rp = build_workbook(
             actual_txns=actual, plan_txns=plan, actual_result=res,
+            annual_history=annual_history,
             actual_month=actual_month, plan_month=plan_month,
             opening_liq_krw=float(vals.get("open_krw") or 0.0),
             opening_liq_usd=float(vals.get("open_usd") or 0.0),

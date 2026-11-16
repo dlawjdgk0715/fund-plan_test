@@ -9,3 +9,10 @@ venv/
 .DS_Store
 ~$*
 *.db-journal
+
+# 보고용 산출물 / 임시 기록 — 코드 저장소에는 넣지 않습니다
+push_log.txt
+Claude outputs/
+자금운용계획_자동화_효과.xlsx
+카탈리스터자금운용계획 작성용 AI 앱 효과*.xlsx
+.gitignore.bak.txt
