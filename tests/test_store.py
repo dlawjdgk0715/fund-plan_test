@@ -189,4 +189,46 @@ seed = ROOT / "db" / "annual_seed.json"
 assert seed.exists() and seed.stat().st_size > 1000
 ok("복구용 씨앗 파일이 리포에 들어 있음")
 
+
+# ── 7. 서식기준 파일 — .xlsm 과 .xlsx 둘 다 받는지 ───────────────
+from core.excel_writer import style_ref_path                       # noqa: E402
+
+_tpl = style_ref_path().parent
+_xlsm = _tpl / "서식기준.xlsm"
+_xlsx = _tpl / "서식기준.xlsx"
+# 실제 쓰시는 파일이 있을 수 있으니 잠시 치워 두고, 끝나면 되돌립니다.
+_baks = {}
+for _p in (_xlsm, _xlsx):
+    if _p.exists():
+        _b = _p.with_suffix(_p.suffix + ".bak")
+        _p.rename(_b)
+        _baks[_p] = _b
+try:
+    assert style_ref_path().name == "서식기준.xlsm", "없을 땐 .xlsm 이름으로 안내해야 합니다"
+    _xlsx.write_bytes(b"x")
+    assert style_ref_path().name == "서식기준.xlsx", \
+        f".xlsx 를 못 찾았습니다: {style_ref_path().name}"
+    ok(".xlsx 로 저장한 서식기준 파일도 찾음 (예전에는 조용히 무시됐습니다)")
+    _xlsm.write_bytes(b"x")
+    assert style_ref_path().name == "서식기준.xlsm", "둘 다 있으면 .xlsm 이 먼저"
+    ok("둘 다 있으면 .xlsm 우선")
+finally:
+    for _p in (_xlsx, _xlsm):
+        if _p.exists() and _p.stat().st_size == 1:
+            _p.unlink()
+    for _p, _b in _baks.items():
+        if _b.exists():
+            _b.rename(_p)
+
+# ── 8. 빈 달 보호 — 자료 없이 산출해도 기록을 덮지 않는지 (정적 검사) ──
+_src = (ROOT / "core" / "outputs.py").read_text(encoding="utf-8")
+_i = _src.index("save_annual_month(year, actual_month")
+_head = _src[:_i]
+assert _head.rstrip().endswith("a_krw, a_usd = annual_values(res)"), "가드 구조가 바뀌었습니다"
+assert "if actual:" in _head[-300:], \
+    "거래가 없을 때 연간 기록을 덮지 않도록 막는 `if actual:` 가 없습니다"
+assert "if plan:" in _src[_i:_i + 400], "계획월에도 같은 가드가 필요합니다"
+ok("자료 없이 산출해도 그 달 연간 기록을 덮지 않음 (0 으로 지워지는 사고 방지)")
+
+
 print(f"\n총 {n_ok}개 항목 통과")

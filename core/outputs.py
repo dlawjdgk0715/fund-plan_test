@@ -21,7 +21,7 @@ from core.data_store import (load_remark_style, load_report_remarks,
                              load_report_remarks_raw, load_transactions,
                              save_fund_balance, txn_fingerprint)
 from core.engine import ROW_NO, aggregate, compute_fund_balance_change
-from core.excel_writer import STYLE_REF_PATH, build_workbook
+from core.excel_writer import build_workbook, style_ref_path
 from core.ppt_writer import PPT_TEMPLATE, build_ppt
 from core.remarks_rule import (SUMMARY1_KEYS, cashflow_rows_from_summary1,
                                detail_drafts, summary1_drafts,
@@ -67,7 +67,7 @@ def inputs_stamp(period: str, vals: dict, actual_month: int, plan_month: int) ->
     for key in ("summary1", "detail", "cash_flow"):
         parts.append(f"s:{key}:" + json.dumps(load_remark_style(key), ensure_ascii=False,
                                               sort_keys=True))
-    for p in (TEMPLATE_PATH, PPT_TEMPLATE, STYLE_REF_PATH):
+    for p in (TEMPLATE_PATH, PPT_TEMPLATE, style_ref_path()):
         parts.append("t:" + _file_mark(p))
     return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:16]
 
@@ -214,10 +214,15 @@ def build_outputs(period: str, vals: dict, actual_month: int, plan_month: int,
         from core.excel_writer import annual_values
         year = int(str(period)[:4])
         plan_year = year + 1 if plan_month < actual_month else year
-        a_krw, a_usd = annual_values(res)
-        p_krw, p_usd = annual_values(plan_res)
-        save_annual_month(year, actual_month, a_krw, a_usd, kind="actual")
-        save_annual_month(plan_year, plan_month, p_krw, p_usd, kind="plan")
+        # 거래가 하나도 없는 달은 **저장하지 않습니다.**
+        #   자료를 안 올린 채 산출을 누르면 그 달이 0 으로 덮여서, 애써 쌓아 둔
+        #   지난 값이 지워집니다. 빈 산출은 기록을 건드리지 않게 막습니다.
+        if actual:
+            a_krw, a_usd = annual_values(res)
+            save_annual_month(year, actual_month, a_krw, a_usd, kind="actual")
+        if plan:
+            p_krw, p_usd = annual_values(plan_res)
+            save_annual_month(plan_year, plan_month, p_krw, p_usd, kind="plan")
         annual_history = load_annual_year(year)
     except Exception as e:                       # noqa: BLE001 — 산출은 계속합니다
         annual_history = {}

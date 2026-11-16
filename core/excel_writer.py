@@ -405,7 +405,7 @@ def build_workbook(actual_txns, plan_txns, actual_result: Result,
         wb["2-1"][CELL_OPEN_INV_KRW] = opening_inv_krw
         wb["2-1"][CELL_OPEN_INV_USD] = opening_inv_usd
 
-    use_ref = STYLE_REF_PATH.exists()
+    use_ref = style_ref_path().exists()
 
     # 4-a) 3p 집계 수식을 태그 사전 기준으로 통일
     _rewrite_3p_formulas(wb, warnings)
@@ -731,8 +731,24 @@ def _rewrite_3p_formulas(wb, warnings):
 # 이 두 시트는 거의 전부 수식(유동자금세부·요약2 참조)이라, 숫자는 알아서 새로 계산되고
 # **열 너비·행 높이·글꼴·테두리·표 위치는 손보신 그대로** 유지됩니다.
 # 우리가 갈아 끼우는 것은 ① 월 표기 ② 기초잔고 ③ 비고 문구, 세 가지뿐입니다.
-STYLE_REF_PATH = TEMPLATE_PATH.with_name("서식기준.xlsm")
+# 확장자는 `.xlsm` / `.xlsx` 둘 다 받습니다 (2026-11).
+#   산출물을 엑셀에서 손보고 '다른 이름으로 저장'하면 보통 **.xlsx** 가 됩니다.
+#   예전에는 `.xlsm` 만 찾아서, 애써 다듬은 파일이 조용히 무시됐습니다.
+#   이 시트들은 서식·수식만 베껴 오므로 매크로가 없어도 아무 문제 없습니다.
 STYLE_REF_SHEETS = ("요약1", "요약2")
+_STYLE_REF_EXTS = (".xlsm", ".xlsx")
+
+
+def style_ref_path():
+    """`templates/서식기준.xlsm` 또는 `.xlsx` 중 **있는 것**을 돌려줍니다."""
+    for ext in _STYLE_REF_EXTS:
+        p = TEMPLATE_PATH.with_name("서식기준" + ext)
+        if p.exists():
+            return p
+    return TEMPLATE_PATH.with_name("서식기준" + _STYLE_REF_EXTS[0])
+
+
+STYLE_REF_PATH = style_ref_path()      # 예전 이름 (import 하는 곳이 있습니다)
 
 
 def _copy_sheet_whole(src_ws, dst_wb, title):
@@ -813,10 +829,11 @@ def _apply_style_reference(wb, actual_month, plan_month,
                            opening_inv_krw, opening_inv_usd,
                            summary_drafts, warnings) -> bool:
     """기준 파일이 있으면 요약1·요약2를 그 서식으로 만듭니다. 썼으면 True."""
-    if not STYLE_REF_PATH.exists():
+    ref_path = style_ref_path()
+    if not ref_path.exists():
         return False
     try:
-        ref = openpyxl.load_workbook(STYLE_REF_PATH)
+        ref = openpyxl.load_workbook(ref_path)
     except Exception as e:
         warnings.append(f"서식기준 파일을 못 읽어 기본 서식으로 만듭니다 ({e}).")
         return False
